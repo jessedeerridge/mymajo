@@ -21,6 +21,20 @@ main{
   height:calc(100vh - 60px);
   overflow:auto;
   -webkit-overflow-scrolling:touch;
+
+  /* ★ 入室前：トップ画像 */
+  background-image: url('mymajotop.jpg');
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: cover;
+}
+
+/* 入室後：背景差し替え */
+main.entered{
+  background-image: url('majoback.jpg');
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: cover;
 }
 
 .join-box{display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:12px;}
@@ -70,12 +84,6 @@ main{
   filter:saturate(.6);
   cursor:not-allowed !important;
   pointer-events:none;
-}
-main.entered{
-  background-image: url('majoback.jpg');
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: cover;
 }
 
 .vote-badge{
@@ -520,7 +528,7 @@ main.entered{
 .eraser-btn.is-eraser{ background-image:url('kesigomu.png'); }
 
 /* ===========================
-   ★ 追加：中央拡大カード（揺らし）モーダル
+   ★ 中央拡大カード（揺らし）
    =========================== */
 .mv-backdrop{
   position:fixed; inset:0;
@@ -555,6 +563,39 @@ main.entered{
   55%{ transform: rotate(-4deg) scale(1.02); }
   75%{ transform: rotate(3deg) scale(1.01); }
   100%{ transform: rotate(0deg) scale(1); }
+}
+
+/* ===========================
+   ★ 追加：ジーザス黒ポップ（クリックで公開）
+   =========================== */
+.jesus-backdrop{
+  position:fixed; inset:0;
+  background:rgba(0,0,0,.35);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  z-index:950;
+}
+.jesus-backdrop.hidden{ display:none; }
+.jesus-pop{
+  background:rgba(0,0,0,.92);
+  color:#fff;
+  border-radius:16px;
+  padding:18px 22px;
+  box-shadow:0 18px 44px rgba(0,0,0,.45);
+  max-width:min(420px, calc(100% - 44px));
+  text-align:center;
+  font-weight:900;
+  line-height:1.6;
+  cursor:pointer;
+  user-select:none;
+}
+.jesus-pop .smallhint{
+  display:block;
+  margin-top:10px;
+  font-size:12px;
+  font-weight:800;
+  opacity:.85;
 }
 </style>
 </head>
@@ -664,9 +705,16 @@ main.entered{
   </div>
 </div>
 
-<!-- ★追加：中央拡大カード（揺らし） -->
+<!-- ★中央拡大カード（揺らし） -->
 <div id="mvBackdrop" class="mv-backdrop hidden" aria-hidden="true">
   <div id="mvCard" class="mv-card" aria-label="結果カード"></div>
+</div>
+
+<!-- ★追加：ジーザス黒ポップ（クリックで公開） -->
+<div id="jesusBackdrop" class="jesus-backdrop hidden" aria-hidden="true">
+  <div id="jesusPop" class="jesus-pop" role="button" tabindex="0" aria-label="ジーザス公開">
+    「Oh...Jusus...!」と言って、ここをクリック
+  </div>
 </div>
 
 <script type="module">
@@ -674,14 +722,14 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/9.23.0/firebas
 import { getDatabase, ref, set, get, update, onValue, runTransaction } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyAMeKfMoHt9qOQ2VuUBpkrKuei7yGBbEi8",
-  authDomain: "cheesetheft-fd52f.firebaseapp.com",
-  databaseURL: "https://cheesetheft-fd52f-default-rtdb.firebaseio.com",
-  projectId: "cheesetheft-fd52f",
-  storageBucket: "cheesetheft-fd52f.firebasestorage.app",
-  messagingSenderId: "298688959395",
-  appId: "1:298688959395:web:6ac2c3eb214201f2020016",
-  measurementId: "G-HPDFTCLR8H"
+  apiKey: "AIzaSyC6cW5FHIZZ_Sny-snPcmvVftP9ejudpI4",
+  authDomain: "mymajo-c774b.firebaseapp.com",
+  databaseURL: "https://mymajo-c774b-default-rtdb.firebaseio.com/",
+  projectId: "mymajo-c774b",
+  storageBucket: "mymajo-c774b.firebasestorage.app",
+  messagingSenderId: "689434548090",
+  appId: "1:689434548090:web:c7ff2764a3a6f0589528c3",
+  measurementId: "G-WY16X5CH69"
 };
 
 const app = initializeApp(firebaseConfig);
@@ -705,7 +753,12 @@ const state = {
   votesDone: false,
   rolesRevealed: false,
   phase: "WRITE",
-  forcedRoles: {}
+  forcedRoles: {},
+  publicReveals: {},
+
+  /* ★追加：FX同期（ジーザス揺れ等） */
+  fx: null,
+  _lastFxNonce: 0
 };
 
 const joinBox = document.getElementById('joinBox');
@@ -754,11 +807,15 @@ const helpBackdrop = document.getElementById('helpBackdrop');
 const helpClose = document.getElementById('helpClose');
 const helpList = document.getElementById('helpList');
 
-/* ★追加：中央拡大カード要素 */
+/* ★中央拡大カード要素 */
 const mvBackdrop = document.getElementById('mvBackdrop');
 const mvCard = document.getElementById('mvCard');
-let mvTimer = null;      // 自動クローズ用
-let mvShowTimer = null;  // 1秒遅延表示用
+let mvTimer = null;
+let mvShowTimer = null;
+
+/* ★ジーザス黒ポップ */
+const jesusBackdrop = document.getElementById('jesusBackdrop');
+const jesusPop = document.getElementById('jesusPop');
 
 let drawCtx = null;
 let drawIsOpen = false;
@@ -797,11 +854,67 @@ const HELP_ROLES = [
 const FORCE_KEYS = new Set(["INFLUENCER","STALKER","JESUS","MENHERA_COUPLE"]);
 
 /* =========================================================
-   ★追加：投票スキップ（投票相手ゼロなら投票済扱い）
+   投票スキップ（投票相手ゼロなら投票済扱い）
    ========================================================= */
 const VOTE_SKIP = "__SKIP__";
 const isRealVote = (v) => !!v && v !== VOTE_SKIP;
 
+/* ===========================
+   ★ジーザス公開ポップ制御
+   =========================== */
+function closeJesusPop(){
+  jesusBackdrop.classList.add('hidden');
+  jesusBackdrop.setAttribute('aria-hidden','true');
+}
+function openJesusPop(){
+  jesusBackdrop.classList.remove('hidden');
+  jesusBackdrop.setAttribute('aria-hidden','false');
+}
+function shouldShowJesusPop(){
+  if (!state.roomCode) return false;
+  if (state.rolesRevealed) return false;
+  if (state.phase !== "VOTE") return false;
+  const myRole = state.roles[state.userId]?.role || null;
+  if (myRole !== "JESUS") return false;
+  if (state.publicReveals && state.publicReveals[state.userId]) return false;
+  return true;
+}
+function syncJesusPopVisibility(){
+  if (shouldShowJesusPop()) openJesusPop();
+  else closeJesusPop();
+}
+
+/* ★ジーザス：クリックで公開＋演出を全員同期 */
+jesusPop.addEventListener('click', async () => {
+  if (!state.roomCode) return;
+
+  // 1) 公開フラグを立てる（全員にジーザスのミニカードが見える）
+  await set(ref(db, `rooms/${state.roomCode}/publicReveals/${state.userId}`), true);
+
+  // 2) 黒ポップを閉じる
+  closeJesusPop();
+
+  // 3) 演出を全員に同期（投票は継続）
+  await set(ref(db, `rooms/${state.roomCode}/fx`), {
+    type: "JESUS_SHAKE",
+    playerId: state.userId,
+    nonce: Date.now()
+  });
+});
+
+jesusPop.addEventListener('keydown', async (e) => {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    jesusPop.click();
+  }
+});
+jesusBackdrop.addEventListener('click', (e) => {
+  // 背景クリックは閉じない（必ずクリックで公開）
+});
+
+/* ===========================
+   Help
+   =========================== */
 function renderHelpList(){
   helpList.innerHTML = "";
   for (const r of HELP_ROLES){
@@ -862,6 +975,36 @@ function subscribeForcedRoles(){
   onValue(fr, snap => {
     state.forcedRoles = snap.val() || {};
     if (!helpBackdrop.classList.contains('hidden')) renderHelpList();
+  });
+}
+
+/* ★追加：個別公開（publicReveals）subscribe */
+function subscribePublicReveals(){
+  if (!state.roomCode) return;
+  const pr = ref(db, `rooms/${state.roomCode}/publicReveals`);
+  onValue(pr, snap => {
+    state.publicReveals = snap.val() || {};
+    syncJesusPopVisibility();
+    if (latestPlayers.length) renderPlayerCircle(latestPlayers);
+  });
+}
+
+/* ★追加：FX同期 subscribe（ジーザス拡大揺れを全員に） */
+function subscribeFx(){
+  if (!state.roomCode) return;
+  const fxRef = ref(db, `rooms/${state.roomCode}/fx`);
+  onValue(fxRef, snap => {
+    const fx = snap.val();
+    if (!fx) return;
+
+    const nonce = fx.nonce || 0;
+    if (nonce <= (state._lastFxNonce || 0)) return; // 既に処理済み
+    state._lastFxNonce = nonce;
+
+    if (fx.type === "JESUS_SHAKE" && fx.playerId){
+      closeMostVotedOverlay();
+      openMostVotedOverlay(fx.playerId);
+    }
   });
 }
 
@@ -957,10 +1100,11 @@ function updateHostUI(){
   }
   updateBestAnswerButtonVisibility();
   updateVotePopVisibility();
+  syncJesusPopVisibility();
 }
 
 /* ===========================
-   ★追加：中央拡大カード演出
+   中央拡大カード演出
    =========================== */
 function closeMostVotedOverlay(){
   if (mvShowTimer) { clearTimeout(mvShowTimer); mvShowTimer = null; }
@@ -969,24 +1113,19 @@ function closeMostVotedOverlay(){
   mvBackdrop.setAttribute('aria-hidden','true');
   mvCard.style.backgroundImage = '';
 }
-
 function openMostVotedOverlay(playerId){
   if (!playerId) return;
   const role = state.roles[playerId]?.role;
   const img = ROLE_IMG[role] || null;
   if (!img) return;
-
   if (mvTimer) clearTimeout(mvTimer);
 
   mvCard.style.backgroundImage = `url('${img}')`;
   mvBackdrop.classList.remove('hidden');
   mvBackdrop.setAttribute('aria-hidden','false');
 
-  mvTimer = setTimeout(() => {
-    closeMostVotedOverlay();
-  }, 1400);
+  mvTimer = setTimeout(() => { closeMostVotedOverlay(); }, 1400);
 }
-
 mvBackdrop.addEventListener('click', (e) => {
   if (e.target === mvBackdrop) closeMostVotedOverlay();
 });
@@ -994,7 +1133,7 @@ mvBackdrop.addEventListener('click', (e) => {
 function getVoteCounts(){
   const counts = {};
   for (const [, target] of Object.entries(state.votes || {})){
-    if (!isRealVote(target)) continue; // ★SKIP不计入
+    if (!isRealVote(target)) continue;
     counts[target] = (counts[target] || 0) + 1;
   }
   return counts;
@@ -1018,6 +1157,18 @@ function getMinorityInBestSelected(){
   }
   return null;
 }
+function scheduleRevealFX(){
+  if (mvShowTimer) { clearTimeout(mvShowTimer); mvShowTimer = null; }
+  closeMostVotedOverlay();
+
+  const minorityPid = getMinorityInBestSelected();
+  const shouldUseMinority = !!minorityPid;
+  const mostVotedPid = getMostVotedPlayerId();
+  const targetPid = shouldUseMinority ? minorityPid : mostVotedPid;
+  if (!targetPid) return;
+
+  mvShowTimer = setTimeout(() => { openMostVotedOverlay(targetPid); }, 1000);
+}
 
 /* ===========================
    Firebase subscribe
@@ -1040,6 +1191,7 @@ function subscribeRoles(){
     state.roles = snap.val() || {};
     renderRoles();
     if (latestPlayers.length) renderPlayerCircle(latestPlayers);
+    syncJesusPopVisibility();
   });
 }
 
@@ -1071,7 +1223,6 @@ function subscribeVotesDone(){
     state.votesDone = !!snap.val();
     updateVotePopVisibility();
     if (latestPlayers.length) renderPlayerCircle(latestPlayers);
-
     maybeAutoRevealRolesAfterVote();
   });
 }
@@ -1120,6 +1271,7 @@ function subscribeRolesRevealed(){
     updateVotePopVisibility();
     renderRoles();
     if (latestPlayers.length) renderPlayerCircle(latestPlayers);
+    syncJesusPopVisibility();
 
     if (!prevRolesRevealed && v){
       scheduleRevealFX();
@@ -1137,28 +1289,9 @@ function subscribePhase(){
     updateVotePopVisibility();
     if (latestPlayers.length) renderPlayerCircle(latestPlayers);
 
+    syncJesusPopVisibility();
     maybeAutoRevealRolesAfterVote();
   });
-}
-
-/* ===========================
-   ★追加：公開演出
-   =========================== */
-function scheduleRevealFX(){
-  if (mvShowTimer) { clearTimeout(mvShowTimer); mvShowTimer = null; }
-  closeMostVotedOverlay();
-
-  const minorityPid = getMinorityInBestSelected();
-  const shouldUseMinority = !!minorityPid;
-
-  const mostVotedPid = getMostVotedPlayerId();
-
-  const targetPid = shouldUseMinority ? minorityPid : mostVotedPid;
-  if (!targetPid) return;
-
-  mvShowTimer = setTimeout(() => {
-    openMostVotedOverlay(targetPid);
-  }, 1000);
 }
 
 async function maybeAutoRevealRolesAfterVote(){
@@ -1453,11 +1586,6 @@ function renderPlayerCircle(players){
   const votingNow = (state.phase === "VOTE" && !state.rolesRevealed);
   const myVote = state.votes[state.userId] || null;
 
-  /* =========================================================
-     ★核心追加：投票相手为0人 → 自动写入 SKIP（投票済扱い）
-     条件：VOTE中、未votesDone、自己还没投票
-     可投票对象：除自己外，且不在BestSelected(蓝色)里
-     ========================================================= */
   if (votingNow && !state.votesDone && !myVote){
     const candidates = players
       .map(p => p.id)
@@ -1471,7 +1599,7 @@ function renderPlayerCircle(players){
   const counts = {};
   if (state.votesDone){
     for (const [, target] of Object.entries(state.votes || {})){
-      if (!isRealVote(target)) continue; // ★SKIP不计入
+      if (!isRealVote(target)) continue;
       counts[target] = (counts[target] || 0) + 1;
     }
   }
@@ -1602,7 +1730,10 @@ function renderPlayerCircle(players){
       const miniFaceUpMenheraPair =
         iAmMenhera && (p.id !== state.userId) && (otherRole === "MENHERA_COUPLE");
 
-      const miniFaceUp = miniFaceUpCommon || miniFaceUpMenheraPair;
+      const miniFaceUpPublic =
+        !!(state.publicReveals && state.publicReveals[p.id]);
+
+      const miniFaceUp = miniFaceUpCommon || miniFaceUpMenheraPair || miniFaceUpPublic;
 
       if (miniFaceUp){
         mini.classList.add('role-revealed');
@@ -1642,7 +1773,6 @@ async function maybeSetVotesDone(){
   const ids = latestPlayers.map(p => p.id);
   if (ids.length < 2) return;
 
-  // ★注意：SKIP 也算“投票済” → 这里仍用 !!state.votes[pid] 即可
   const allVoted = ids.every(pid => !!state.votes[pid]);
   if (!allVoted) return;
 
@@ -1682,6 +1812,8 @@ btnJoin.addEventListener('click', async () => {
   if (!roomData || roomData.votesDone == null) await update(roomRef, { votesDone:false });
   if (!roomData || roomData.forcedRoles == null) await update(roomRef, { forcedRoles: {} });
   if (!roomData || roomData.playerDraw == null) await update(roomRef, { playerDraw: {} });
+  if (!roomData || roomData.publicReveals == null) await update(roomRef, { publicReveals: {} });
+  if (!roomData || roomData.fx == null) await update(roomRef, { fx: null }); // ★追加（任意）
 
   updateHostUI();
 
@@ -1713,6 +1845,8 @@ btnJoin.addEventListener('click', async () => {
   subscribePhase();
   subscribeForcedRoles();
   subscribePlayerDraw();
+  subscribePublicReveals();
+  subscribeFx(); // ★追加：演出同期（ジーザス揺れ）
 
   const myDRef = ref(db, `rooms/${state.roomCode}/playerDraw/${state.userId}`);
   const myDSnap = await get(myDRef);
@@ -1928,6 +2062,7 @@ async function dealIdentityCards(){
   });
 
   closeMostVotedOverlay();
+  closeJesusPop();
 
   await update(ref(db, `rooms/${state.roomCode}`), {
     boardsRevealed:false,
@@ -1938,6 +2073,8 @@ async function dealIdentityCards(){
   await set(ref(db, `rooms/${state.roomCode}/votes`), {});
   await set(ref(db, `rooms/${state.roomCode}/bestSelected`), {});
   await set(ref(db, `rooms/${state.roomCode}/playerDraw`), drawReset);
+  await set(ref(db, `rooms/${state.roomCode}/publicReveals`), {});
+  await set(ref(db, `rooms/${state.roomCode}/fx`), null); /* ★追加：FXリセット */
   await set(ref(db, `rooms/${state.roomCode}/roles`), roles);
 }
 
