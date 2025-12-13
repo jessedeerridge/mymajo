@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>マイマジョ</title>
 <style>
 html, body{ height:100%; overflow:hidden; }
@@ -28,7 +28,6 @@ main{
   background-position: center;
   background-size: cover;
 }
-
 /* 入室後：背景差し替え */
 main.entered{
   background-image: url('majoback.jpg');
@@ -52,8 +51,27 @@ main.entered{
 .seat-pop label{width:84px;font-size:13px;}
 .seat-pop .tabs{display:flex;gap:6px;flex-wrap:wrap;}
 .tab{padding:6px 10px;border:1px solid #ddd;border-radius:999px;cursor:pointer;user-select:none;position:relative;}
+.tab.disabled{opacity:.35;pointer-events:none;}
 .tab.disabled::after{content:'✕';position:absolute;inset:0;display:grid;place-items:center;font-size:18px;font-weight:700;color:#b91c1c;pointer-events:none;}
 .tab.active{background:#111;color:#fff;border-color:#111;}
+
+/* ★ 下黒ポップ（ホスト人数選択中） */
+.status-pop{
+  position:fixed;
+  left:50%;
+  bottom:12px;
+  transform:translateX(-50%);
+  background:rgba(0,0,0,.92);
+  color:#fff;
+  border-radius:999px;
+  padding:10px 14px;
+  font-weight:900;
+  font-size:13px;
+  box-shadow:0 18px 40px rgba(0,0,0,.35);
+  z-index:270;
+  white-space:nowrap;
+}
+.status-pop.hidden{display:none;}
 
 .player-circle{
   position:relative;
@@ -79,29 +97,19 @@ main.entered{
 .player-tag.me{ background:#111; color:#fff; border-color:#111; }
 .player-tag.voted:not(.me){ background:#111; color:#fff; border-color:#111; }
 .player-tag.votable:hover{ outline:2px solid rgba(0,0,0,.18); outline-offset:2px; }
-.player-tag.unvotable{
-  opacity:.45;
-  filter:saturate(.6);
-  cursor:not-allowed !important;
-  pointer-events:none;
-}
+.player-tag.unvotable{opacity:.45;filter:saturate(.6);cursor:not-allowed !important;pointer-events:none;}
 
 .vote-badge{
-  position:absolute;
-  left:50%;
-  top:-16px;
+  position:absolute; left:50%; top:-16px;
   transform:translateX(-50%);
-  font-size:14px;
-  line-height:1;
+  font-size:14px; line-height:1;
   pointer-events:none;
   filter: drop-shadow(0 2px 6px rgba(0,0,0,.25));
   color:#111;
 }
 
 .player-tag .mini-role{
-  position:absolute;
-  left:50%;
-  top:100%;
+  position:absolute; left:50%; top:100%;
   transform:translate(-50%,3px);
   width:18px; height:24px;
   pointer-events:none;
@@ -277,9 +285,10 @@ main.entered{
 }
 .start-pop.hidden{display:none;}
 .start-pop-header{display:flex;justify-content:space-between;align-items:center;gap:8px;}
-.start-pop-title{font-size:14px;font-weight:600;}
+.start-pop-title{font-size:14px;font-weight:900;}
 .start-pop-main{font-size:13px;line-height:1.5;}
 .start-pop-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:4px;}
+.start-pop-actions .btn{font-weight:900;}
 
 #roomInfoLobby,#lobby h2,#lobby p{display:none;}
 #lobby.entered{
@@ -492,14 +501,12 @@ main.entered{
   overflow:hidden;
   position:relative;
 }
-
 #drawCanvas{
   width:100%;
   height:100%;
   display:block;
   touch-action:none;
 }
-
 .draw-actions{
   width:100%;
   display:flex;
@@ -679,6 +686,9 @@ main.entered{
   </div>
 </div>
 
+<!-- ★ 下黒ポップ -->
+<div id="statusPop" class="status-pop hidden">ホストが人数選択中</div>
+
 <div id="kickDialog" class="dialog-backdrop hidden">
   <div class="dialog-box" id="kickDialogBox">
     <p id="kickMessage">既存のプレイヤーを追い出して、着席しますか？</p>
@@ -691,16 +701,18 @@ main.entered{
 
 <button id="hostSettingsBtn" class="host-settings-btn" title="設定">⚙</button>
 
+<!-- ★ 設定ポップ（スタート + リセット） -->
 <div id="startPop" class="start-pop hidden">
   <div class="start-pop-header">
-    <div class="start-pop-title">ゲームスタート</div>
+    <div class="start-pop-title">設定</div>
     <button id="btnStartPopClose" class="btn ghost" style="padding:2px 6px;font-size:12px;">×</button>
   </div>
   <div class="start-pop-main">
-    準備ができたら「スタート」を押してください。<br>
-    押すと全プレイヤーに<strong>正体カードが1枚</strong>配られます（手札は配りません）。
+    準備ができたら「スタート」。<br>
+    やり直す場合は「リセット」（席選択からやり直し）
   </div>
   <div class="start-pop-actions">
+    <button id="btnRoomReset" class="btn">リセット</button>
     <button id="btnGameStart" class="btn primary">スタート</button>
   </div>
 </div>
@@ -755,10 +767,11 @@ const state = {
   phase: "WRITE",
   forcedRoles: {},
   publicReveals: {},
-
-  /* ★追加：FX同期（ジーザス揺れ等） */
   fx: null,
-  _lastFxNonce: 0
+  _lastFxNonce: 0,
+
+  /* ★追加：人数（maxPlayers） */
+  maxPlayers: null
 };
 
 const joinBox = document.getElementById('joinBox');
@@ -774,6 +787,7 @@ const seatPop = document.getElementById('seatPop');
 const seatTabs = document.getElementById('seatTabs');
 const btnSeatCancel = document.getElementById('btnSeatCancel');
 const seatLabel = seatPop.querySelector('label');
+const statusPop = document.getElementById('statusPop');
 
 const playerCircle = document.getElementById('playerCircle');
 const myHandEl = document.getElementById('myHand');
@@ -787,6 +801,7 @@ const hostSettingsBtn = document.getElementById('hostSettingsBtn');
 const startPop = document.getElementById('startPop');
 const btnStartPopClose = document.getElementById('btnStartPopClose');
 const btnGameStart = document.getElementById('btnGameStart');
+const btnRoomReset = document.getElementById('btnRoomReset');
 
 const votePop = document.getElementById('votePop');
 
@@ -860,6 +875,33 @@ const VOTE_SKIP = "__SKIP__";
 const isRealVote = (v) => !!v && v !== VOTE_SKIP;
 
 /* ===========================
+   ★人数選択中UI（席ポップ非表示 + 下黒ポップ）
+   =========================== */
+function updateSeatAndStatusUI(){
+  const entered = !!state.roomCode && !joinBox.classList.contains('hidden');
+  // joinBox hidden後にenteredになるので、ロビー表示で判断
+  const inLobby = !lobby.classList.contains('hidden');
+
+  const maxNotSet = !state.maxPlayers; // null/undefined
+  const shouldShowSelecting = inLobby && maxNotSet && !state.isHost;
+  statusPop.classList.toggle('hidden', !shouldShowSelecting);
+
+  // 非ホストは、ホストが人数選択中なら seatPop を出さない
+  if (inLobby && maxNotSet && !state.isHost){
+    seatPop.classList.add('hidden');
+    return;
+  }
+
+  // maxPlayersが決まっていて、未着席なら seatPop を同期表示
+  if (inLobby && !!state.maxPlayers && state.seatedTable === null){
+    seatPop.classList.remove('hidden');
+  } else {
+    // 着席したら消える（同期）
+    seatPop.classList.toggle('hidden', state.seatedTable !== null);
+  }
+}
+
+/* ===========================
    ★ジーザス公開ポップ制御
    =========================== */
 function closeJesusPop(){
@@ -888,29 +930,22 @@ function syncJesusPopVisibility(){
 jesusPop.addEventListener('click', async () => {
   if (!state.roomCode) return;
 
-  // 1) 公開フラグを立てる（全員にジーザスのミニカードが見える）
   await set(ref(db, `rooms/${state.roomCode}/publicReveals/${state.userId}`), true);
-
-  // 2) 黒ポップを閉じる
   closeJesusPop();
 
-  // 3) 演出を全員に同期（投票は継続）
   await set(ref(db, `rooms/${state.roomCode}/fx`), {
     type: "JESUS_SHAKE",
     playerId: state.userId,
     nonce: Date.now()
   });
 });
-
 jesusPop.addEventListener('keydown', async (e) => {
   if (e.key === "Enter" || e.key === " ") {
     e.preventDefault();
     jesusPop.click();
   }
 });
-jesusBackdrop.addEventListener('click', (e) => {
-  // 背景クリックは閉じない（必ずクリックで公開）
-});
+jesusBackdrop.addEventListener('click', (e) => { /* 背景クリックは閉じない */ });
 
 /* ===========================
    Help
@@ -969,6 +1004,7 @@ async function toggleForcedRole(roleKey){
   const cur = !!(state.forcedRoles && state.forcedRoles[roleKey]);
   await set(p, !cur);
 }
+
 function subscribeForcedRoles(){
   if (!state.roomCode) return;
   const fr = ref(db, `rooms/${state.roomCode}/forcedRoles`);
@@ -998,13 +1034,28 @@ function subscribeFx(){
     if (!fx) return;
 
     const nonce = fx.nonce || 0;
-    if (nonce <= (state._lastFxNonce || 0)) return; // 既に処理済み
+    if (nonce <= (state._lastFxNonce || 0)) return;
     state._lastFxNonce = nonce;
 
     if (fx.type === "JESUS_SHAKE" && fx.playerId){
       closeMostVotedOverlay();
       openMostVotedOverlay(fx.playerId);
     }
+  });
+}
+
+/* ★追加：maxPlayers subscribe（①の同期要） */
+function subscribeMaxPlayers(){
+  if (!state.roomCode) return;
+  const mpRef = ref(db, `rooms/${state.roomCode}/maxPlayers`);
+  onValue(mpRef, async snap => {
+    state.maxPlayers = snap.val() || null;
+
+    // maxPlayersが決まった瞬間、未着席なら席タブを作り直す（同期）
+    if (state.seatedTable === null){
+      await renderSeatTabs();
+    }
+    updateSeatAndStatusUI();
   });
 }
 
@@ -1101,6 +1152,7 @@ function updateHostUI(){
   updateBestAnswerButtonVisibility();
   updateVotePopVisibility();
   syncJesusPopVisibility();
+  updateSeatAndStatusUI();
 }
 
 /* ===========================
@@ -1764,6 +1816,7 @@ async function castVote(targetId){
   if (selectedSet.has(targetId)) return;
   await set(ref(db, `rooms/${state.roomCode}/votes/${state.userId}`), targetId);
 }
+
 async function maybeSetVotesDone(){
   if (!state.roomCode) return;
   if (state.votesDone) return;
@@ -1806,6 +1859,7 @@ btnJoin.addEventListener('click', async () => {
     state.isHost = (roomData.hostId === state.userId);
   }
 
+  // 初期値（足りないものだけ）
   if (!roomData || roomData.boardsRevealed == null) await update(roomRef, { boardsRevealed:false });
   if (!roomData || roomData.rolesRevealed == null) await update(roomRef, { rolesRevealed:false });
   if (!roomData || roomData.phase == null) await update(roomRef, { phase:"WRITE" });
@@ -1813,7 +1867,10 @@ btnJoin.addEventListener('click', async () => {
   if (!roomData || roomData.forcedRoles == null) await update(roomRef, { forcedRoles: {} });
   if (!roomData || roomData.playerDraw == null) await update(roomRef, { playerDraw: {} });
   if (!roomData || roomData.publicReveals == null) await update(roomRef, { publicReveals: {} });
-  if (!roomData || roomData.fx == null) await update(roomRef, { fx: null }); // ★追加（任意）
+  if (!roomData || roomData.fx == null) await update(roomRef, { fx: null });
+
+  // maxPlayersは「未設定＝人数選択中」を表現
+  if (!roomData || roomData.maxPlayers == null) await update(roomRef, { maxPlayers: null });
 
   updateHostUI();
 
@@ -1826,15 +1883,13 @@ btnJoin.addEventListener('click', async () => {
 
   await restoreSeatFromDB();
 
-  if (state.seatedTable === null) {
-    await renderSeatTabs();
-    seatPop.classList.remove('hidden');
-  } else {
-    seatPop.classList.add('hidden');
-  }
+  // ここで maxPlayers は subscribeで同期される
+  await renderSeatTabs();
+  updateSeatAndStatusUI();
 
   subscribePlayers();
   subscribeHostState();
+  subscribeMaxPlayers();      // ★追加
   subscribeRoles();
   subscribeWhiteboard();
   subscribeBoardsRevealed();
@@ -1846,7 +1901,7 @@ btnJoin.addEventListener('click', async () => {
   subscribeForcedRoles();
   subscribePlayerDraw();
   subscribePublicReveals();
-  subscribeFx(); // ★追加：演出同期（ジーザス揺れ）
+  subscribeFx();
 
   const myDRef = ref(db, `rooms/${state.roomCode}/playerDraw/${state.userId}`);
   const myDSnap = await get(myDRef);
@@ -1871,6 +1926,14 @@ copyLinkBtn.addEventListener('click', async () => {
   }
 });
 
+/* ===========================
+   ★席/人数タブ描画（①）
+   - maxPlayers未設定:
+     - ホスト: 人数選択タブ（2..8）
+     - 非ホスト: 何も出さない（下黒ポップのみ）
+   - maxPlayers設定済:
+     - 席選択タブ（1..maxPlayers）
+   =========================== */
 async function renderSeatTabs(){
   if (!state.roomCode) return;
   if (isRenderingSeatTabs) return;
@@ -1880,43 +1943,59 @@ async function renderSeatTabs(){
     const roomRef = ref(db, `rooms/${state.roomCode}`);
     const roomSnap = await get(roomRef);
     const roomData = roomSnap.val() || {};
-    const maxPlayers = roomData.maxPlayers || 8;
+    const maxPlayers = roomData.maxPlayers || null;
 
-    if(state.isHost && !roomData.maxPlayers){
+    state.maxPlayers = maxPlayers;
+
+    // 非ホストで人数未決定なら、seatPop自体を出さない（下黒ポップへ）
+    if (!maxPlayers && !state.isHost){
+      seatLabel.textContent = '席を選択';
+      return;
+    }
+
+    if (state.isHost && !maxPlayers){
       seatLabel.textContent = '人数を選択';
       for(let i=2; i<=8; i++){
         const tab = document.createElement('div');
         tab.className = 'tab';
         tab.textContent = i;
         tab.onclick = async () => {
+          // maxPlayers確定 + ホストを席1へ
           await update(roomRef, { maxPlayers: i });
+
           const tRef = ref(db, `rooms/${state.roomCode}/tables/1`);
           await set(tRef, { playerId: state.userId, playerName: state.userName });
+
           state.seatedTable = 1;
-          seatPop.classList.add('hidden');
+
+          // 同期で全員のUIが切り替わる
+          await renderSeatTabs();
+          updateSeatAndStatusUI();
         };
         seatTabs.appendChild(tab);
       }
-    } else {
-      seatLabel.textContent = '席を選択';
-      const tablesSnap = await get(ref(db, `rooms/${state.roomCode}/tables`));
-      const tables = tablesSnap.val() || {};
-      for(let i=1; i<=maxPlayers; i++){
-        const tab = document.createElement('div');
-        tab.className = 'tab';
-        tab.textContent = i;
-        const t = tables[i];
-        if(t && t.playerId) tab.classList.add('disabled');
-        tab.onclick = async () => {
-          if(tab.classList.contains('disabled')) return;
-          const tRef = ref(db, `rooms/${state.roomCode}/tables/${i}`);
-          await set(tRef, { playerId: state.userId, playerName: state.userName });
-          tab.classList.add('disabled');
-          state.seatedTable = i;
-          seatPop.classList.add('hidden');
-        };
-        seatTabs.appendChild(tab);
-      }
+      return;
+    }
+
+    // maxPlayers決定後：席選択
+    seatLabel.textContent = '席を選択';
+    const tablesSnap = await get(ref(db, `rooms/${state.roomCode}/tables`));
+    const tables = tablesSnap.val() || {};
+    for(let i=1; i<=maxPlayers; i++){
+      const tab = document.createElement('div');
+      tab.className = 'tab';
+      tab.textContent = i;
+      const t = tables[i];
+      if(t && t.playerId) tab.classList.add('disabled');
+      tab.onclick = async () => {
+        if(tab.classList.contains('disabled')) return;
+        const tRef = ref(db, `rooms/${state.roomCode}/tables/${i}`);
+        await set(tRef, { playerId: state.userId, playerName: state.userName });
+        tab.classList.add('disabled');
+        state.seatedTable = i;
+        updateSeatAndStatusUI();
+      };
+      seatTabs.appendChild(tab);
     }
   } finally {
     isRenderingSeatTabs = false;
@@ -1928,6 +2007,9 @@ btnSeatCancel.onclick = () => {
   state.seatedTable = null;
 };
 
+/* ===========================
+   ★席同期（①）
+   =========================== */
 function subscribePlayers(){
   const tablesRef = ref(db, `rooms/${state.roomCode}/tables`);
   onValue(tablesRef, async snap => {
@@ -1952,13 +2034,79 @@ function subscribePlayers(){
     const meStillSeated = players.some(p => p.id === state.userId);
     if (!meStillSeated && state.seatedTable !== null) {
       state.seatedTable = null;
-      await renderSeatTabs();
       seatPop.classList.remove('hidden');
+    }
+
+    // ★追加：未着席で席ポップが出ているなら、tabsを再描画して空き状況を同期
+    if (state.seatedTable === null && !seatPop.classList.contains('hidden')) {
+      await renderSeatTabs(); // isRenderingSeatTabs があるので連打されても安全
     }
 
     renderPlayerCircle(players);
     maybeSetVotesDone();
   });
+}
+
+
+/* ===========================
+   ★席奪取（③）引き継ぎ
+   - oldPid の「正体/ボード/投票/公開/ベスト選択」を newUid に移管
+   - さらに「他人の投票先/ベスト選択先」も oldPid→newUid に置換
+   =========================== */
+async function stealSeatWithInheritance(seatIndex, oldPid){
+  if (!state.roomCode) return;
+  const roomRef = ref(db, `rooms/${state.roomCode}`);
+  const snap = await get(roomRef);
+  const room = snap.val() || {};
+
+  const roles = room.roles || {};
+  const playerDraw = room.playerDraw || {};
+  const votes = room.votes || {};
+  const publicReveals = room.publicReveals || {};
+  const bestSelected = room.bestSelected || {};
+  const hostId = room.hostId || null;
+
+  const updates = {};
+  const base = `rooms/${state.roomCode}`;
+
+  // 1) 席の入れ替え
+  updates[`${base}/tables/${seatIndex}`] = { playerId: state.userId, playerName: state.userName || '名無し' };
+
+  // 2) 旧プレイヤーの「自分の状態」を新プレイヤーへ移管（存在するものだけ）
+  if (roles[oldPid]) {
+    updates[`${base}/roles/${state.userId}`] = roles[oldPid];
+    updates[`${base}/roles/${oldPid}`] = null;
+  }
+  if (playerDraw[oldPid]) {
+    updates[`${base}/playerDraw/${state.userId}`] = playerDraw[oldPid];
+    updates[`${base}/playerDraw/${oldPid}`] = null;
+  }
+  if (votes[oldPid]) {
+    updates[`${base}/votes/${state.userId}`] = votes[oldPid];
+    updates[`${base}/votes/${oldPid}`] = null;
+  }
+  if (publicReveals[oldPid]) {
+    updates[`${base}/publicReveals/${state.userId}`] = publicReveals[oldPid];
+    updates[`${base}/publicReveals/${oldPid}`] = null;
+  }
+  if (bestSelected[oldPid] != null) {
+    updates[`${base}/bestSelected/${state.userId}`] = bestSelected[oldPid];
+    updates[`${base}/bestSelected/${oldPid}`] = null;
+  }
+
+  // 3) 他人の「投票先」を oldPid→newUid に置換（投票状況も引き継ぐ）
+  for (const [voter, target] of Object.entries(votes)){
+    if (target === oldPid){
+      updates[`${base}/votes/${voter}`] = state.userId;
+    }
+  }
+
+  // 4) host奪取ならホスト移譲
+  if (hostId && hostId === oldPid){
+    updates[`${base}/hostId`] = state.userId;
+  }
+
+  await update(ref(db), updates);
 }
 
 kickDialog.addEventListener('click', (e) => {
@@ -1982,24 +2130,18 @@ btnKickYes.addEventListener('click', async (e) => {
   }
 
   const seatIndex = pendingSeatIndexToSteal;
-  const roomRef = ref(db, `rooms/${state.roomCode}`);
+  const oldPid = pendingSeatPlayerIdToSteal;
 
-  const roomSnap = await get(roomRef);
-  const roomData = roomSnap.val() || {};
-
-  const tRef = ref(db, `rooms/${state.roomCode}/tables/${seatIndex}`);
-  await set(tRef, { playerId: state.userId, playerName: state.userName || '名無し' });
-
-  if (roomData.hostId && pendingSeatPlayerIdToSteal && roomData.hostId === pendingSeatPlayerIdToSteal) {
-    await update(roomRef, { hostId: state.userId });
-  }
+  // ★③ 引き継ぎ付き奪取
+  await stealSeatWithInheritance(seatIndex, oldPid);
 
   state.seatedTable = seatIndex;
 
   kickDialog.classList.add('hidden');
   pendingSeatIndexToSteal = null;
   pendingSeatPlayerIdToSteal = null;
-  seatPop.classList.add('hidden');
+
+  updateSeatAndStatusUI();
 });
 
 /* ===========================
@@ -2074,8 +2216,47 @@ async function dealIdentityCards(){
   await set(ref(db, `rooms/${state.roomCode}/bestSelected`), {});
   await set(ref(db, `rooms/${state.roomCode}/playerDraw`), drawReset);
   await set(ref(db, `rooms/${state.roomCode}/publicReveals`), {});
-  await set(ref(db, `rooms/${state.roomCode}/fx`), null); /* ★追加：FXリセット */
+  await set(ref(db, `rooms/${state.roomCode}/fx`), null);
   await set(ref(db, `rooms/${state.roomCode}/roles`), roles);
+}
+
+/* ===========================
+   ★設定（② リセット追加）
+   - リセットでカード/ボード/投票/公開/席を初期化し「席選択（人数選択）」へ戻す
+   =========================== */
+async function hardResetRoomToSeatSelect(){
+  if (!state.isHost) return;
+  if (!state.roomCode) return;
+
+  const base = `rooms/${state.roomCode}`;
+  const updates = {};
+
+  // ゲーム状態リセット
+  updates[`${base}/boardsRevealed`] = false;
+  updates[`${base}/rolesRevealed`] = false;
+  updates[`${base}/phase`] = "WRITE";
+  updates[`${base}/votesDone`] = false;
+
+  // データクリア
+  updates[`${base}/roles`] = {};
+  updates[`${base}/votes`] = {};
+  updates[`${base}/bestSelected`] = {};
+  updates[`${base}/playerDraw`] = {};
+  updates[`${base}/publicReveals`] = {};
+  updates[`${base}/fx`] = null;
+  updates[`${base}/whiteboard`] = { text:"", updatedAt: Date.now(), updatedBy: state.userId };
+
+  // ★席選択へ戻す：テーブル全消去 & 人数未設定に戻す（人数選択から）
+  updates[`${base}/tables`] = {};
+  updates[`${base}/maxPlayers`] = null;
+
+  await update(ref(db), updates);
+
+  // ローカルも戻す（同期でも追従するが即反映）
+  state.seatedTable = null;
+  state.maxPlayers = null;
+  await renderSeatTabs();
+  updateSeatAndStatusUI();
 }
 
 hostSettingsBtn.addEventListener('click', () => {
@@ -2083,9 +2264,16 @@ hostSettingsBtn.addEventListener('click', () => {
   startPop.classList.toggle('hidden');
 });
 btnStartPopClose.addEventListener('click', () => { startPop.classList.add('hidden'); });
+
 btnGameStart.addEventListener('click', async () => {
   if (!state.isHost) return;
   await dealIdentityCards();
+  startPop.classList.add('hidden');
+});
+
+btnRoomReset.addEventListener('click', async () => {
+  if (!state.isHost) return;
+  await hardResetRoomToSeatSelect();
   startPop.classList.add('hidden');
 });
 
@@ -2142,7 +2330,6 @@ wb.addEventListener('click', () => {
   wbText.focus();
   placeCaretToEnd(wbText);
 });
-
 wbText.addEventListener('focus', () => { wbLocalTyping = true; });
 wbText.addEventListener('blur',  () => { wbLocalTyping = false; });
 
