@@ -878,8 +878,6 @@ const isRealVote = (v) => !!v && v !== VOTE_SKIP;
    ★人数選択中UI（席ポップ非表示 + 下黒ポップ）
    =========================== */
 function updateSeatAndStatusUI(){
-  const entered = !!state.roomCode && !joinBox.classList.contains('hidden');
-  // joinBox hidden後にenteredになるので、ロビー表示で判断
   const inLobby = !lobby.classList.contains('hidden');
 
   const maxNotSet = !state.maxPlayers; // null/undefined
@@ -896,7 +894,6 @@ function updateSeatAndStatusUI(){
   if (inLobby && !!state.maxPlayers && state.seatedTable === null){
     seatPop.classList.remove('hidden');
   } else {
-    // 着席したら消える（同期）
     seatPop.classList.toggle('hidden', state.seatedTable !== null);
   }
 }
@@ -1094,8 +1091,12 @@ function updateBestAnswerButtonLabel(){
   bestAnswerLabel.textContent = (s.size >= 1) ? "Best Answer!" : "No Best Answer!";
 }
 
+/* =========================================================
+   ★投票結果は「Restart(=リセット)」まで表示し続ける
+   - votesDone=true の間は phase/rolesRevealed に関係なく結果UIを維持
+   ========================================================= */
 function updateVotePopVisibility(){
-  const shouldShow = (state.phase === "VOTE" && !state.rolesRevealed);
+  const shouldShow = !!state.votesDone;  // ★変更：結果はリセットまで残す
   votePop.classList.toggle('hidden', !shouldShow);
   if (!shouldShow) return;
 
@@ -1415,19 +1416,40 @@ function updateEraserBtnUI(){
   btnEraser.classList.toggle("is-eraser", drawTool === "eraser");
   btnEraser.classList.toggle("is-pen",    drawTool !== "eraser");
 }
-function openDrawModal(){
+
+/* =========================================================
+   ★白板(手書き)は「外側クリックで閉じない」
+   ★自分が開いたら done を false に戻す（未完了へ）
+   ========================================================= */
+async function openDrawModal(){
   if (!state.roomCode) return;
+
+  // 公開状態（全員に表示）では再編集しない：既存仕様維持
   if (state.boardsRevealed) return;
+
+  // ★開いた瞬間に「未完了」へ戻す（他人に公開される状態を解除）
+  const cur = ensureMyDraw();
+  if (cur.done){
+    cur.done = false;
+    cur.updatedAt = Date.now();
+    cur.updatedBy = state.userId;
+    await set(ref(db, `rooms/${state.roomCode}/playerDraw/${state.userId}`), cur);
+  }
+
   drawBackdrop.classList.remove('hidden');
   drawBackdrop.setAttribute('aria-hidden','false');
   drawIsOpen = true;
+
   if (!drawCtx) drawCtx = drawCanvas.getContext("2d");
   resizeCanvasToCSS(drawCanvas);
+
   const my = ensureMyDraw();
   drawPathsTo(drawCtx, my.paths);
+
   drawTool = "pen";
   updateEraserBtnUI();
 }
+
 function closeDrawModal(){
   drawBackdrop.classList.add('hidden');
   drawBackdrop.setAttribute('aria-hidden','true');
@@ -1435,7 +1457,10 @@ function closeDrawModal(){
   drawIsPointerDown = false;
   drawCurrentPath = null;
 }
-drawBackdrop.addEventListener('click', (e) => { if (e.target === drawBackdrop) closeDrawModal(); });
+
+/* ★変更：外側クリックでは閉じない（Completeのみ） */
+// drawBackdrop.addEventListener('click', (e) => { if (e.target === drawBackdrop) closeDrawModal(); });
+
 window.addEventListener('resize', () => {
   if (!drawIsOpen) return;
   if (!drawCtx) return;
@@ -1465,6 +1490,7 @@ btnDoneDraw.addEventListener('click', async () => {
   closeDrawModal();
   maybeAutoRevealIfAllDone();
 });
+
 function getNormPointFromEvent(ev){
   const rect = drawCanvas.getBoundingClientRect();
   const x = (ev.clientX - rect.left) / rect.width;
@@ -1648,8 +1674,10 @@ function renderPlayerCircle(players){
     }
   }
 
+  /* ★変更：votesDone の間は結果（✉）を phase/rolesRevealed に関係なく表示 */
+  const showVoteResults = !!state.votesDone;
   const counts = {};
-  if (state.votesDone){
+  if (showVoteResults){
     for (const [, target] of Object.entries(state.votes || {})){
       if (!isRealVote(target)) continue;
       counts[target] = (counts[target] || 0) + 1;
@@ -1680,6 +1708,7 @@ function renderPlayerCircle(players){
       if (p.id !== state.userId && otherVoted) tag.classList.add('voted');
     }
 
+    // ★投票中の自分の投票先バッジ（従来）
     if (votingNow && !state.votesDone && myVote && myVote === p.id){
       const b = document.createElement('div');
       b.className = 'vote-badge';
@@ -1687,7 +1716,8 @@ function renderPlayerCircle(players){
       tag.appendChild(b);
     }
 
-    if (votingNow && state.votesDone){
+    // ★結果表示：votesDone=true の間ずっと表示（REVEALでも消えない）
+    if (showVoteResults){
       const c = counts[p.id] || 0;
       if (c > 0){
         const b = document.createElement('div');
@@ -1883,13 +1913,12 @@ btnJoin.addEventListener('click', async () => {
 
   await restoreSeatFromDB();
 
-  // ここで maxPlayers は subscribeで同期される
   await renderSeatTabs();
   updateSeatAndStatusUI();
 
   subscribePlayers();
   subscribeHostState();
-  subscribeMaxPlayers();      // ★追加
+  subscribeMaxPlayers();
   subscribeRoles();
   subscribeWhiteboard();
   subscribeBoardsRevealed();
@@ -1928,11 +1957,6 @@ copyLinkBtn.addEventListener('click', async () => {
 
 /* ===========================
    ★席/人数タブ描画（①）
-   - maxPlayers未設定:
-     - ホスト: 人数選択タブ（2..8）
-     - 非ホスト: 何も出さない（下黒ポップのみ）
-   - maxPlayers設定済:
-     - 席選択タブ（1..maxPlayers）
    =========================== */
 async function renderSeatTabs(){
   if (!state.roomCode) return;
@@ -1947,7 +1971,6 @@ async function renderSeatTabs(){
 
     state.maxPlayers = maxPlayers;
 
-    // 非ホストで人数未決定なら、seatPop自体を出さない（下黒ポップへ）
     if (!maxPlayers && !state.isHost){
       seatLabel.textContent = '席を選択';
       return;
@@ -1960,7 +1983,6 @@ async function renderSeatTabs(){
         tab.className = 'tab';
         tab.textContent = i;
         tab.onclick = async () => {
-          // maxPlayers確定 + ホストを席1へ
           await update(roomRef, { maxPlayers: i });
 
           const tRef = ref(db, `rooms/${state.roomCode}/tables/1`);
@@ -1968,7 +1990,6 @@ async function renderSeatTabs(){
 
           state.seatedTable = 1;
 
-          // 同期で全員のUIが切り替わる
           await renderSeatTabs();
           updateSeatAndStatusUI();
         };
@@ -1977,7 +1998,6 @@ async function renderSeatTabs(){
       return;
     }
 
-    // maxPlayers決定後：席選択
     seatLabel.textContent = '席を選択';
     const tablesSnap = await get(ref(db, `rooms/${state.roomCode}/tables`));
     const tables = tablesSnap.val() || {};
@@ -2037,9 +2057,8 @@ function subscribePlayers(){
       seatPop.classList.remove('hidden');
     }
 
-    // ★追加：未着席で席ポップが出ているなら、tabsを再描画して空き状況を同期
     if (state.seatedTable === null && !seatPop.classList.contains('hidden')) {
-      await renderSeatTabs(); // isRenderingSeatTabs があるので連打されても安全
+      await renderSeatTabs();
     }
 
     renderPlayerCircle(players);
@@ -2047,11 +2066,8 @@ function subscribePlayers(){
   });
 }
 
-
 /* ===========================
    ★席奪取（③）引き継ぎ
-   - oldPid の「正体/ボード/投票/公開/ベスト選択」を newUid に移管
-   - さらに「他人の投票先/ベスト選択先」も oldPid→newUid に置換
    =========================== */
 async function stealSeatWithInheritance(seatIndex, oldPid){
   if (!state.roomCode) return;
@@ -2069,10 +2085,8 @@ async function stealSeatWithInheritance(seatIndex, oldPid){
   const updates = {};
   const base = `rooms/${state.roomCode}`;
 
-  // 1) 席の入れ替え
   updates[`${base}/tables/${seatIndex}`] = { playerId: state.userId, playerName: state.userName || '名無し' };
 
-  // 2) 旧プレイヤーの「自分の状態」を新プレイヤーへ移管（存在するものだけ）
   if (roles[oldPid]) {
     updates[`${base}/roles/${state.userId}`] = roles[oldPid];
     updates[`${base}/roles/${oldPid}`] = null;
@@ -2094,14 +2108,12 @@ async function stealSeatWithInheritance(seatIndex, oldPid){
     updates[`${base}/bestSelected/${oldPid}`] = null;
   }
 
-  // 3) 他人の「投票先」を oldPid→newUid に置換（投票状況も引き継ぐ）
   for (const [voter, target] of Object.entries(votes)){
     if (target === oldPid){
       updates[`${base}/votes/${voter}`] = state.userId;
     }
   }
 
-  // 4) host奪取ならホスト移譲
   if (hostId && hostId === oldPid){
     updates[`${base}/hostId`] = state.userId;
   }
@@ -2132,7 +2144,6 @@ btnKickYes.addEventListener('click', async (e) => {
   const seatIndex = pendingSeatIndexToSteal;
   const oldPid = pendingSeatPlayerIdToSteal;
 
-  // ★③ 引き継ぎ付き奪取
   await stealSeatWithInheritance(seatIndex, oldPid);
 
   state.seatedTable = seatIndex;
@@ -2222,7 +2233,7 @@ async function dealIdentityCards(){
 
 /* ===========================
    ★設定（② リセット追加）
-   - リセットでカード/ボード/投票/公開/席を初期化し「席選択（人数選択）」へ戻す
+   - リセットで「投票結果」も含めて全部初期化（Restart）
    =========================== */
 async function hardResetRoomToSeatSelect(){
   if (!state.isHost) return;
@@ -2231,13 +2242,11 @@ async function hardResetRoomToSeatSelect(){
   const base = `rooms/${state.roomCode}`;
   const updates = {};
 
-  // ゲーム状態リセット
   updates[`${base}/boardsRevealed`] = false;
   updates[`${base}/rolesRevealed`] = false;
   updates[`${base}/phase`] = "WRITE";
   updates[`${base}/votesDone`] = false;
 
-  // データクリア
   updates[`${base}/roles`] = {};
   updates[`${base}/votes`] = {};
   updates[`${base}/bestSelected`] = {};
@@ -2246,13 +2255,11 @@ async function hardResetRoomToSeatSelect(){
   updates[`${base}/fx`] = null;
   updates[`${base}/whiteboard`] = { text:"", updatedAt: Date.now(), updatedBy: state.userId };
 
-  // ★席選択へ戻す：テーブル全消去 & 人数未設定に戻す（人数選択から）
   updates[`${base}/tables`] = {};
   updates[`${base}/maxPlayers`] = null;
 
   await update(ref(db), updates);
 
-  // ローカルも戻す（同期でも追従するが即反映）
   state.seatedTable = null;
   state.maxPlayers = null;
   await renderSeatTabs();
@@ -2396,5 +2403,3 @@ function fitFontToBox(el, startSize=22, minSize=10){
 </script>
 </body>
 </html>
-
-
